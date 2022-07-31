@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=0, maximum-scale=1">
+    <title>域名测试</title>
+    <link rel="stylesheet" href="css/index.css">
+    <link rel="stylesheet" href="css/element-ui.min.css">
+    <script src="js/jquery.min.js" type="text/javascript"></script>
+    <script src="js/vue.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="js/element-ui.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="js/xlsx.full.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="js/dayjs.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="js/request.js" type="text/javascript" charset="utf-8"></script>
+</head>
+<body>
+<div id="app">
+    <el-button @click="window.open('./导入模板.xlsx')">下载模板</el-button>
+    <el-upload :loading="importLoading"
+               action=""
+               :auto-upload="false"
+               :file-list="fileList"
+               :on-change="handleImport"
+               :show-file-list="false"
+               style="display: inline-block">
+        <el-button>导入数据</el-button>
+    </el-upload>
+    <el-button @click="startTest" :disabled="!testTable.length" :loading="testLoading">开始测试</el-button>
+    <el-button style="margin: 0" @click="exportData" v-show="testTable.length" :disabled="exportDisable">导出数据
+    </el-button>
+    <el-table :data="testTable" v-if="testTable.length" width="500">
+        <el-table-column align="center" width="100" prop="批次" label="批次"></el-table-column>
+        <el-table-column align="center" width="100" prop="类型" label="类型"></el-table-column>
+        <el-table-column align="center" width="180" prop="域名" label="域名"></el-table-column>
+        <el-table-column align="center" width="180" prop="解析IP" label="解析IP"></el-table-column>
+        <el-table-column align="center" width="100" prop="检测结果" label="检测结果">
+            <template v-slot="scope">
+                <template v-if="scope.row.done === true">
+                    <i class="el-icon-success" style="color:#67C23A" v-if="scope.row.success === true"></i>
+                    <el-popover
+                            placement="top"
+                            width="225"
+                            trigger="click">
+                        <template>
+                            <div style="text-align:center;display: inline-block;vertical-align: top;">
+                                <div>提供的</div>
+                                <div v-for="ip in scope.row.rightHostArr">{{ip}}</div>
+                            </div>
+                            <div style="text-align:center;display: inline-block;vertical-align: top;">
+                                <div>测试的</div>
+                                <div v-for="ip in scope.row.ipCommon">{{ip}}</div>
+                                <div v-for="ip in scope.row.ipDeficit">&nbsp;</div>
+                                <div v-for="ip in scope.row.ipSurplus" style="color: #F56C6C">{{ip}}</div>
+                            </div>
+                        </template>
+                        <div slot="reference" v-if="scope.row.success === false"
+                             @mouseover="scope.row.warningHover = true"
+                             @mouseleave="scope.row.warningHover = false">
+                            <i class="el-icon-warning"
+                               v-if="scope.row.warningHover == false"
+                               style="color:#F56C6C"></i>
+                            <div v-else style="color:#F56C6C">点击<br/>查看差异</div>
+                        </div>
+                    </el-popover>
+                </template>
+                <template v-else-if="scope.row.done === false && scope.row.nodesCount">
+                    {{scope.row.nodesTestedCount}}/{{scope.row.nodesCount}}
+                </template>
+            </template>
+        </el-table-column>
+        <el-table-column align="center" width="100" prop="IP数量" label="IP数量">
+            <template v-slot="scope">
+                {{Object.keys(scope.row.ipMap).length||""}}
+            </template>
+        </el-table-column>
+        <el-table-column align="center" width="120" label="HTTP状态数">
+            <template v-slot="scope">
+                <template v-if="scope.row.done !== null">
+                    {{scope.row.statusPrefixArr.length}}
+                </template>
+            </template>
+        </el-table-column>
+        <el-table-column align="center" width="100" label="连通率">
+            <template v-slot="scope">
+                <template v-if="scope.row.done !== null&&scope.row.nodesTestedCount">
+                    {{(scope.row.nodesSuccessCount / scope.row.nodesTestedCount * 100).toFixed(2)}}%
+                </template>
+            </template>
+        </el-table-column>
+        <el-table-column align="center" width="180" label="结果链接">
+            <template v-slot="scope">
+                <div style="color: #409EFF"
+                     @click="window.open('https://7c.cc/?br='+scope.row.token)"
+                     v-if="scope.row.done && scope.row.token">结果链接
+                </div>
+            </template>
+        </el-table-column>
+        <el-table-column align="center" label="IP地址汇总">
+            <template v-slot="scope">
+                {{Object.keys(scope.row.ipMap).map(k => k + ':' + scope.row.ipMap[k]).join(',')}}
+            </template>
+        </el-table-column>
+    </el-table>
+</div>
+</body>
+
+<script>
+    new Vue({
+        el: '#app',
+        data: function () {
+            return {
+                importLoading: false,
+                testLoading: false,
+                exportDisable: true,
+                //上传文件列表
+                fileList: [],
+                //测试表
+                testTable: [],
+                //代表成功的状态码首数字
+                successStatusPrefix: ["2", "3"],
+                //请求间隔(毫秒)
+                requestInterval: 100,
+            }
+        },
+        async created() {
+        },
+        computed: {
+            jsonStr(aa) {
+                return JSON.stringify(aa);
+            }
+        },
+        methods: {
+            //获取模板
+            getTemplate() {
+                window.open('./导入模板.xlsx');
+            },
+            //导入excel
+            handleImport(file, fileList) {
+                // 保持fileList.length = 1, 防止多文件出现卡顿
+                this.fileList = [fileList[fileList.length - 1]];
+                this.file = file.raw;
+                let reader = new FileReader();
+                let _this = this;
+                reader.readAsArrayBuffer(this.file);
+                reader.onload = function () {
+                    //读取excel
+                    let bytes = new Uint8Array(reader.result);
+                    let length = bytes.byteLength;
+                    let binary = '';
+                    for (let i = 0; i < length; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    let wb = XLSX.read(binary, {type: 'binary', sheetStubs: true});
+                    let testTable = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                    console.log(JSON.stringify(testTable));
+
+                    //处理空行
+                    for (let i = 0; i < testTable.length;) {
+                        if (!(testTable[i]["域名"]?.trim() && testTable[i]["解析IP"]?.trim())) {
+                            testTable.splice(i, 1);
+                        } else {
+                            //初始化测试参数
+                            testTable[i] = Object.assign(testTable[i], {
+                                rightHostArr: testTable[i]["解析IP"].split(",").sort(),//校对的域名ip
+                                nodesCount: 0,//节点数
+                                nodesSuccessCount: 0,//成功的节点数
+                                nodesTestedCount: 0,//已经测试的节点数
+                                ipMap: {},//独立的ip映射
+                                ipCommon: [], ipDeficit: [], ipSurplus: [],//ip差异的同，差，余
+                                statusPrefixArr: [],//状态
+                                done: null,//完成done，待测试null，未完成false
+                                success: null,//成功true，待测试null，异常false
+                                token: "",
+                                warningHover: false,
+                            })
+                            i++;
+                        }
+                    }
+                    _this.testTable = testTable;
+                }
+            },
+            //开始测试
+            startTest() {
+                if (!this.testTable.length) {
+                    alert("无待检测数据");
+                    return;
+                }
+                this.testLoading = true;
+                this.exportDisable = true;
+                let _this = this;
+                //测试每个域名
+                _this.testTable.forEach((row) => {
+                    //显示loading状态
+                    row.done = false;
+                    //获取全部测试节点
+                    getAllNodes()
+                        .then(getAllNodesResponse => {
+                            //保存token
+                            row.token = getAllNodesResponse.token;
+                            //节点数
+                            row.nodesCount = getAllNodesResponse["nodescount"];
+                            //测试每个节点
+                            getAllNodesResponse.nodes.forEach((node, index) => {
+                                setTimeout(() => {
+                                    getNodeResult({
+                                        nodeSeq: node["seq"],
+                                        targetUrl: row["域名"],
+                                        token: getAllNodesResponse.token
+                                    }).then(getNodeResultResponse => {
+                                        //访问成功(通过首字母进行判断)
+                                        if (_this.successStatusPrefix.includes(getNodeResultResponse.statuscode.charAt(0))) {
+                                            //记录状态数
+                                            if (!row.statusPrefixArr.includes(getNodeResultResponse.statuscode)) {
+                                                console.log(getNodeResultResponse.statuscode, row.statusPrefixArr)
+                                                row.statusPrefixArr.push(getNodeResultResponse.statuscode)
+                                            }
+                                            //记录ip映射
+                                            if (!row.ipMap[getNodeResultResponse.ip]) {
+                                                setTimeout(() => {
+                                                    //多做一次校验，防止多次请求影响效率
+                                                    if (!row.ipMap[getNodeResultResponse.ip]) {
+                                                        getIpArea(getNodeResultResponse.ip).then(getIpAreaResponse => {
+                                                            row.ipMap[getNodeResultResponse.ip] = getIpAreaResponse.city;
+                                                        })
+                                                    }
+                                                }, _this.requestInterval)
+                                            }
+                                            row.nodesSuccessCount++;
+                                        }
+                                    }).finally(() => {
+                                        row.nodesTestedCount++
+                                        //完成标志
+                                        if (row.nodesTestedCount === row.nodesCount) {
+                                            row.done = true;
+                                            //检查异常
+                                            row.success = row.rightHostArr.sort().toString() === Object.keys(row.ipMap).sort().toString();
+                                            //整理差异,重复在前
+                                            if (!row.success) {
+                                                //同，差，余
+                                                Object.keys(row.ipMap).forEach(ip => {
+                                                    if (row.rightHostArr.includes(ip)) {
+                                                        row.ipCommon.push(ip);
+                                                    } else {
+                                                        row.ipSurplus.push(ip);
+                                                    }
+                                                })
+                                                row.ipDeficit = row.rightHostArr.filter(ip => !row.ipMap[ip]);
+                                                row.rightHostArr = [...row.ipCommon, ...row.rightHostArr.filter(ip => !row.ipCommon.includes(ip))]
+                                            }
+                                        }
+                                        //全部域名都结束
+                                        if (_this.testTable.filter(row => !row.done).length === 0) {
+                                            _this.testLoading = false;
+                                            _this.exportDisable = false;
+                                        }
+                                        // _this.$forceUpdate();
+                                    })
+                                }, _this.requestInterval * index)
+                            })
+                        })
+                })
+            },
+            //导出数据
+            exportData() {
+                // 数据转换
+                let exportData = this.testTable.map((row, index) => {
+                    return {
+                        "序号": index + 1,
+                        "批次": row["批次"],
+                        "类型": row["类型"],
+                        "域名": row["域名"],
+                        "解析IP": row["解析IP"],
+                        "检测结果": row.success ? '成功' : '异常',
+                        "IP数量": Object.keys(row.ipMap).length,
+                        "HTTP状态数": row.statusPrefixArr.length,
+                        "连通率": (row.nodesSuccessCount / row.nodesTestedCount * 100).toFixed(2),
+                        "结果链接": 'https://7c.cc/?br=' + row.token,
+                        "IP地址汇总": Object.keys(row.ipMap).map(k => k + ':' + row.ipMap[k]).join(','),
+                    }
+                })
+                let workbook = XLSX.utils.book_new();
+                workbook.SheetNames.push("Sheet1");
+                workbook.Sheets["Sheet1"] = XLSX.utils.json_to_sheet(exportData);
+                XLSX.writeFile(workbook, `域名测试结果${dayjs().format('YYMMDD_hhmmss')}.xlsx`);
+            },
+        }
+    })
+</script>
+</html>
